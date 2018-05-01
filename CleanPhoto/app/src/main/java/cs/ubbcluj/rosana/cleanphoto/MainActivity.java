@@ -11,8 +11,11 @@ import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.widget.ImageView;
 
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -74,19 +77,20 @@ public class MainActivity extends AppCompatActivity {
 
         FileOutputStream out = null;
 
-        List<Bitmap> images = new ArrayList<>();
+        List<Bitmap> luminanceImages = new ArrayList<>();
         for (int sec = 0; sec <= timeInMSec; sec = sec + 500) {
 
-            Bitmap bmFrame = mediaMetadataRetriever.getFrameAtTime(sec * 1000, FFmpegMediaMetadataRetriever.OPTION_PREVIOUS_SYNC);//unit in microsecond
+            Bitmap bmFrame = mediaMetadataRetriever.getFrameAtTime(sec * 1000, FFmpegMediaMetadataRetriever.OPTION_CLOSEST);//unit in microsecond
 
             try {
                 out = new FileOutputStream(path + "/img_" + sec + ".png");
                 bmFrame.compress(Bitmap.CompressFormat.PNG, 100, out); // bmp is your Bitmap instance
                 // PNG is a lossless format, the compression factor (100) is ignored
+
+                Bitmap luminanceImg = convertToYUV(bmFrame);
+                luminanceImages.add(luminanceImg);
                 if (sec == 0) {
-                    Bitmap r = convertToYUV(bmFrame);
-                    r.compress(Bitmap.CompressFormat.PNG,100,out);
-                    capturedImageView.setImageBitmap(r);
+                    capturedImageView.setImageBitmap(luminanceImg);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -100,13 +104,51 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
+
+        if (luminanceImages.size() > 1) {
+            int[][] diff = computeDifference(luminanceImages.get(0), luminanceImages.get(1));
+            writeMatrix(path + "/diff.txt", diff);
+            clearMovement(luminanceImages.get(0), diff);
+        }
+    }
+
+    private void clearMovement(Bitmap bitmap, int[][] diff) {
+        //TODO: check if a similar pixel is not somewhere in the surroundings (taking into account small transaltions
+        //TODO: umbra? =)) pune conditia cu mai mult de 20.. da nu foarte mult
+
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        Bitmap result = bitmap.copy(bitmap.getConfig(), true);
+
+        for (int i = 0; i < width; i++) {
+            for (int j = 0; j < height; j++) {
+                if (Math.abs(diff[i][j]) > 20)
+                    result.setPixel(i, j, Color.WHITE);
+            }
+        }
+
+        FileOutputStream out = null;
+        try {
+             out = new FileOutputStream(path + "/cleared.png");
+            result.compress(Bitmap.CompressFormat.PNG, 100, out);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (out != null) {
+                    out.close();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
     }
 
     public Bitmap convertToYUV(Bitmap bitmap) {
 
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
-//        int[][] matrix = new int[width][height];
         Bitmap result = bitmap.copy(bitmap.getConfig(), true);
         for (int i = 0; i < width; i++) {
             for (int j = 0; j < height; j++) {
@@ -117,12 +159,42 @@ public class MainActivity extends AppCompatActivity {
                 int B = (color) & 0xff;
 
                 int Y = (int) (0.299 * R + 0.587 * G + 0.114 * B);
-//                matrix[i][j] = Y;
+                int U = (int) (-0.147 * R - 0.289 * G + 0.436 * B);
                 result.setPixel(i, j, Y);
             }
         }
         return result;
     }
+
+    public int[][] computeDifference(Bitmap img1, Bitmap img2) {
+        int width = img1.getWidth();
+        int height = img1.getHeight();
+        int[][] matrix = new int[width][height];
+        for (int i = 0; i < width; i++) {
+            for (int j = 0; j < height; j++) {
+                matrix[i][j] = img1.getPixel(i, j) - img2.getPixel(i, j);
+            }
+        }
+        return matrix;
+    }
+
+
+    void writeMatrix(String filename, int[][] matrix) {
+        try {
+            BufferedWriter bw = new BufferedWriter(new FileWriter(filename));
+
+            for (int i = 0; i < matrix.length; i++) {
+                for (int j = 0; j < matrix[i].length; j++) {
+                    bw.write(matrix[i][j] + ((j == matrix[i].length - 1) ? "" : ","));
+                }
+                bw.newLine();
+            }
+            bw.flush();
+        } catch (IOException e) {
+        }
+    }
+
+
 //
 //    static public void encodeYUV420SP(byte[] yuv420sp, int[] rgba,
 //                                      int width, int height) {
