@@ -22,8 +22,12 @@ import java.util.List;
 
 import wseemann.media.FFmpegMediaMetadataRetriever;
 
+import static java.lang.Math.min;
+import static java.lang.Math.pow;
+
 public class MainActivity extends AppCompatActivity {
     static final int REQUEST_VIDEO_CAPTURE = 1;
+    private static int MACROBLOCK_DIM = 64;
     ImageView capturedImageView;
     String path;
     private FFmpegMediaMetadataRetriever mediaMetadataRetriever;
@@ -41,6 +45,9 @@ public class MainActivity extends AppCompatActivity {
         Log.d("PATH", path);
 
         dispatchTakeVideoIntent();
+
+//        mediaMetadataRetriever.setDataSource("/storage/3137-6430/Android/data/cs.ubbcluj.rosana.cleanphoto/files/Movies/a.mp4");
+//        extractFrames();
     }
 
     private void dispatchTakeVideoIntent() {
@@ -84,7 +91,7 @@ public class MainActivity extends AppCompatActivity {
 
             try {
                 out = new FileOutputStream(path + "/img_" + sec + ".png");
-                bmFrame.compress(Bitmap.CompressFormat.PNG, 100, out); // bmp is your Bitmap instance
+                bmFrame.compress(Bitmap.CompressFormat.PNG, 100, out);
                 // PNG is a lossless format, the compression factor (100) is ignored
 
                 Bitmap luminanceImg = convertToYUV(bmFrame);
@@ -105,32 +112,47 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        if (luminanceImages.size() > 1) {
-            int[][] diff = computeDifference(luminanceImages.get(0), luminanceImages.get(1));
-            writeMatrix(path + "/diff.txt", diff);
-            clearMovement(luminanceImages.get(0), diff);
-        }
-    }
+        Bitmap covered = luminanceImages.get(0).copy(luminanceImages.get(0).getConfig(), true);
 
-    private void clearMovement(Bitmap bitmap, int[][] diff) {
-        //TODO: check if a similar pixel is not somewhere in the surroundings (taking into account small transaltions
-        //TODO: umbra? =)) pune conditia cu mai mult de 20.. da nu foarte mult
 
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        Bitmap result = bitmap.copy(bitmap.getConfig(), true);
+        int height = covered.getHeight();
+        int width = covered.getWidth();
 
-        for (int i = 0; i < width; i++) {
-            for (int j = 0; j < height; j++) {
-                if (Math.abs(diff[i][j]) > 20)
-                    result.setPixel(i, j, Color.WHITE);
+        for (int i = 0; i < height; i = i + MACROBLOCK_DIM) {
+            for (int j = 0; j < width; j = j + MACROBLOCK_DIM) {
+                //calculam macroblockul (i,j) din imaginea finala
+                float INF = 1000000000;
+                float minMeanSquaredError = INF;
+                int idMinDiffImgPair = -1;
+                for (int k = 0; k < luminanceImages.size() - 1; k++) {
+                    int n = 0;
+                    int MSE = 0;
+                    for (int y = i; y < min(i + MACROBLOCK_DIM, height); y++)
+                        for (int x = j; x < min(j + MACROBLOCK_DIM, width); x++) {
+                            n++;
+                            MSE += pow((luminanceImages.get(k).getPixel(x, y) - luminanceImages.get(k + 1).getPixel(x, y)), 2);
+                        }
+                    MSE /= n;
+                    if (MSE < minMeanSquaredError) {
+                        minMeanSquaredError = MSE;
+                        idMinDiffImgPair = k;
+                    }
+                }
+
+                for (int y = i; y < min(i + MACROBLOCK_DIM, height); y++)
+                    for (int x = j; x < min(j + MACROBLOCK_DIM, width); x++) {
+                        int meanColor = (luminanceImages.get(idMinDiffImgPair).getPixel(x, y) + luminanceImages.get(idMinDiffImgPair + 1).getPixel(x, y)) / 2;
+                        covered.setPixel(x, y, meanColor);
+                    }
+                Log.d("idMin", Integer.toString(idMinDiffImgPair) + "   i: " + i+ "  j: " + j+ "   minMse: "+minMeanSquaredError);
             }
         }
 
-        FileOutputStream out = null;
         try {
-             out = new FileOutputStream(path + "/cleared.png");
-            result.compress(Bitmap.CompressFormat.PNG, 100, out);
+
+            out = new FileOutputStream(path + "/covered2.png");
+            covered.compress(Bitmap.CompressFormat.PNG, 100, out);
+
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         } finally {
@@ -143,6 +165,67 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
+
+//        if (luminanceImages.size() > 1) {
+//            int[][] diff = computeDifference(luminanceImages.get(0), luminanceImages.get(1));
+//            writeMatrix(path + "/diff.txt", diff);
+//            Bitmap result = clearMovement(luminanceImages.get(0), diff);
+//
+//            Bitmap covered = replaceMovement(luminanceImages.get(2),result);
+//
+//            try {
+//                out = new FileOutputStream(path + "/cleared.png");
+//                result.compress(Bitmap.CompressFormat.PNG, 100, out);
+//
+//                out = new FileOutputStream(path + "/covered.png");
+//                covered.compress(Bitmap.CompressFormat.PNG, 100, out);
+//
+//            } catch (FileNotFoundException e) {
+//                e.printStackTrace();
+//            } finally {
+//                try {
+//                    if (out != null) {
+//                        out.close();
+//                    }
+//                } catch (IOException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//        }
+    }
+
+    private Bitmap replaceMovement(Bitmap bitmap, Bitmap result) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        Bitmap covered = result.copy(bitmap.getConfig(), true);
+
+        for (int i = 0; i < width; i++) {
+            for (int j = 0; j < height; j++) {
+                if (result.getPixel(i, j) == Color.MAGENTA)
+                    covered.setPixel(i, j, bitmap.getPixel(i, j));
+            }
+        }
+
+        return covered;
+    }
+
+    private Bitmap clearMovement(Bitmap bitmap, int[][] diff) {
+        //TODO: check if a similar pixel is not somewhere in the surroundings (taking into account small translations
+        //TODO: umbra? =)) pune conditia cu mai mult de 20.. da nu foarte mult
+
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        Bitmap result = bitmap.copy(bitmap.getConfig(), true);
+
+        for (int i = 0; i < width; i++) {
+            for (int j = 0; j < height; j++) {
+                if (Math.abs(diff[i][j]) > 50)
+                    result.setPixel(i, j, Color.MAGENTA);
+                Log.i("CLEAR: ", i + "  " + j);
+            }
+        }
+
+        return result;
     }
 
     public Bitmap convertToYUV(Bitmap bitmap) {
