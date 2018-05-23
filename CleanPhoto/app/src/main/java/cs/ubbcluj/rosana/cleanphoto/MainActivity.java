@@ -27,7 +27,7 @@ import static java.lang.Math.pow;
 
 public class MainActivity extends AppCompatActivity {
     static final int REQUEST_VIDEO_CAPTURE = 1;
-    private static int MACROBLOCK_DIM = 64;
+    private static int MACROBLOCK_DIM = 8;
     ImageView capturedImageView;
     String path;
     private FFmpegMediaMetadataRetriever mediaMetadataRetriever;
@@ -83,22 +83,24 @@ public class MainActivity extends AppCompatActivity {
         long timeInMSec = Long.parseLong(time);
 
         FileOutputStream out = null;
+        int height = 0;
+        int width = 0;
 
-        List<Bitmap> luminanceImages = new ArrayList<>();
-        for (int sec = 0; sec <= timeInMSec; sec = sec + 500) {
+        List<YUVPixel[][]> luminanceImages = new ArrayList<>();
+        for (int sec = 0; sec <= 1500; sec = sec + 500) {
 
             Bitmap bmFrame = mediaMetadataRetriever.getFrameAtTime(sec * 1000, FFmpegMediaMetadataRetriever.OPTION_CLOSEST);//unit in microsecond
+            height = bmFrame.getHeight();
+            width = bmFrame.getWidth();
 
             try {
                 out = new FileOutputStream(path + "/img_" + sec + ".png");
                 bmFrame.compress(Bitmap.CompressFormat.PNG, 100, out);
                 // PNG is a lossless format, the compression factor (100) is ignored
 
-                Bitmap luminanceImg = convertToYUV(bmFrame);
+                YUVPixel[][] luminanceImg = ImageConverter.bitmapToYUV(bmFrame,sec);
                 luminanceImages.add(luminanceImg);
-                if (sec == 0) {
-                    capturedImageView.setImageBitmap(luminanceImg);
-                }
+
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
@@ -112,11 +114,13 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        Bitmap covered = luminanceImages.get(0).copy(luminanceImages.get(0).getConfig(), true);
+        createImage(luminanceImages,width,height);
 
+    }
 
-        int height = covered.getHeight();
-        int width = covered.getWidth();
+    private void createImage(List<YUVPixel[][]> luminanceImages, int width, int height) {
+        YUVPixel[][] covered = new YUVPixel[width][height];
+        FileOutputStream out = null;
 
         for (int i = 0; i < height; i = i + MACROBLOCK_DIM) {
             for (int j = 0; j < width; j = j + MACROBLOCK_DIM) {
@@ -124,13 +128,16 @@ public class MainActivity extends AppCompatActivity {
                 float INF = 1000000000;
                 float minMeanSquaredError = INF;
                 int idMinDiffImgPair = -1;
-                for (int k = 0; k < luminanceImages.size() - 1; k++) {
+                for (int k = 0; k < 3; k++) { //luminanceImages.size() - 1
                     int n = 0;
                     int MSE = 0;
                     for (int y = i; y < min(i + MACROBLOCK_DIM, height); y++)
                         for (int x = j; x < min(j + MACROBLOCK_DIM, width); x++) {
                             n++;
-                            MSE += pow((luminanceImages.get(k).getPixel(x, y) - luminanceImages.get(k + 1).getPixel(x, y)), 2);
+                            MSE += pow(
+                                    (getPixelAt(x, y, luminanceImages.get(k)).getY()
+                                            - getPixelAt(x, y, luminanceImages.get(k + 1)).getY()),
+                                    2);
                         }
                     MSE /= n;
                     if (MSE < minMeanSquaredError) {
@@ -141,17 +148,27 @@ public class MainActivity extends AppCompatActivity {
 
                 for (int y = i; y < min(i + MACROBLOCK_DIM, height); y++)
                     for (int x = j; x < min(j + MACROBLOCK_DIM, width); x++) {
-                        int meanColor = (luminanceImages.get(idMinDiffImgPair).getPixel(x, y) + luminanceImages.get(idMinDiffImgPair + 1).getPixel(x, y)) / 2;
-                        covered.setPixel(x, y, meanColor);
+                        YUVPixel firstImgPixel = getPixelAt(x, y, luminanceImages.get(idMinDiffImgPair));
+                        YUVPixel secondImgPixel= getPixelAt(x, y, luminanceImages.get(idMinDiffImgPair + 1));
+
+                        YUVPixel meanPixel = getMeanPixel(firstImgPixel,secondImgPixel);
+                        int meanColorY = (getPixelAt(x, y, luminanceImages.get(idMinDiffImgPair)).getY()
+                                + getPixelAt(x, y, luminanceImages.get(idMinDiffImgPair + 1)).getY()) / 2;
+
+                        covered[x][y] = meanPixel;
+
                     }
-                Log.d("idMin", Integer.toString(idMinDiffImgPair) + "   i: " + i+ "  j: " + j+ "   minMse: "+minMeanSquaredError);
+                Log.d("idMin", Integer.toString(idMinDiffImgPair) + "   i: " + i + "  j: " + j + "   minMse: " + minMeanSquaredError);
             }
         }
+
+        Bitmap result = ImageConverter.yuvToRGBBitmap(covered);
+        capturedImageView.setImageBitmap(result);
 
         try {
 
             out = new FileOutputStream(path + "/covered2.png");
-            covered.compress(Bitmap.CompressFormat.PNG, 100, out);
+            result.compress(Bitmap.CompressFormat.PNG, 100, out);
 
         } catch (FileNotFoundException e) {
             e.printStackTrace();
@@ -164,34 +181,17 @@ public class MainActivity extends AppCompatActivity {
                 e.printStackTrace();
             }
         }
+    }
 
+    private YUVPixel getMeanPixel(YUVPixel p1, YUVPixel p2) {
+        int Y = arithmeticMean(p1.getY(),p2.getY());
+        int U = arithmeticMean(p1.getU(),p2.getU());
+        int V = arithmeticMean(p1.getV(),p2.getV());
+        return new YUVPixel(Y,U,V);
+    }
 
-//        if (luminanceImages.size() > 1) {
-//            int[][] diff = computeDifference(luminanceImages.get(0), luminanceImages.get(1));
-//            writeMatrix(path + "/diff.txt", diff);
-//            Bitmap result = clearMovement(luminanceImages.get(0), diff);
-//
-//            Bitmap covered = replaceMovement(luminanceImages.get(2),result);
-//
-//            try {
-//                out = new FileOutputStream(path + "/cleared.png");
-//                result.compress(Bitmap.CompressFormat.PNG, 100, out);
-//
-//                out = new FileOutputStream(path + "/covered.png");
-//                covered.compress(Bitmap.CompressFormat.PNG, 100, out);
-//
-//            } catch (FileNotFoundException e) {
-//                e.printStackTrace();
-//            } finally {
-//                try {
-//                    if (out != null) {
-//                        out.close();
-//                    }
-//                } catch (IOException e) {
-//                    e.printStackTrace();
-//                }
-//            }
-//        }
+    private int arithmeticMean(int a, int b) {
+        return (a+b)/2;
     }
 
     private Bitmap replaceMovement(Bitmap bitmap, Bitmap result) {
@@ -228,39 +228,11 @@ public class MainActivity extends AppCompatActivity {
         return result;
     }
 
-    public Bitmap convertToYUV(Bitmap bitmap) {
 
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        Bitmap result = bitmap.copy(bitmap.getConfig(), true);
-        for (int i = 0; i < width; i++) {
-            for (int j = 0; j < height; j++) {
-                int color = bitmap.getPixel(i, j);
-//                int A = (color >> 24) & 0xff; // or color >>> 24
-                int R = (color >> 16) & 0xff;
-                int G = (color >> 8) & 0xff;
-                int B = (color) & 0xff;
 
-                int Y = (int) (0.299 * R + 0.587 * G + 0.114 * B);
-                int U = (int) (-0.147 * R - 0.289 * G + 0.436 * B);
-                result.setPixel(i, j, Y);
-            }
-        }
-        return result;
+    public YUVPixel getPixelAt(int w, int h, YUVPixel[][] matrix) {
+        return matrix[w][h];
     }
-
-    public int[][] computeDifference(Bitmap img1, Bitmap img2) {
-        int width = img1.getWidth();
-        int height = img1.getHeight();
-        int[][] matrix = new int[width][height];
-        for (int i = 0; i < width; i++) {
-            for (int j = 0; j < height; j++) {
-                matrix[i][j] = img1.getPixel(i, j) - img2.getPixel(i, j);
-            }
-        }
-        return matrix;
-    }
-
 
     void writeMatrix(String filename, int[][] matrix) {
         try {
@@ -277,37 +249,4 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-
-//
-//    static public void encodeYUV420SP(byte[] yuv420sp, int[] rgba,
-//                                      int width, int height) {
-//        final int frameSize = width * height;
-//
-//        int[] U, V;
-//        U = new int[frameSize];
-//        V = new int[frameSize];
-//
-//        final int uvwidth = width / 2;
-//
-//        int r, g, b, y, u, v;
-//        for (int j = 0; j < height; j++) {
-//            int index = width * j;
-//            for (int i = 0; i < width; i++) {
-//
-//                r = Color.red(rgba[index]);
-//                g = Color.green(rgba[index]);
-//                b = Color.blue(rgba[index]);
-//
-//                // rgb to yuv
-//                y = (66 * r + 129 * g + 25 * b + 128) >> 8 + 16;
-//                u = (-38 * r - 74 * g + 112 * b + 128) >> 8 + 128;
-//                v = (112 * r - 94 * g - 18 * b + 128) >> 8 + 128;
-//
-//                // clip y
-//                yuv420sp[index] = (byte) ((y < 0) ? 0 : ((y > 255) ? 255 : y));
-//                U[index] = u;
-//                V[index++] = v;
-//            }
-//        }
-//    }
 }
