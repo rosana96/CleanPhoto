@@ -21,8 +21,6 @@ public class ImageConverter {
             for (int i = 0; i < height; i++) {
                 int color = bitmap.getPixel(j, i);
                 result[j][i] = pixelToYUVPixel(color);
-
-//                result.setPixel(i, j, Y);
             }
         }
 
@@ -37,9 +35,7 @@ public class ImageConverter {
 
         int Y = (int) (0.299 * R + 0.587 * G + 0.114 * B);
         int U = (int) (-0.147 * R - 0.289 * G + 0.436 * B);
-//        int V = (int) (128 + 0.5 * R - 0.4186 * G - 0.0813 * B);
         int V = (int) (0.615*R - 0.515*G - 0.100*B);
-
 
         return new YUVPixel(Y, U, V);
     }
